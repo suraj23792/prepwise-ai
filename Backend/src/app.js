@@ -8,8 +8,8 @@ const app = express()
 app.use(express.json())
 app.use(cookieParser())
 app.use(cors({
-    origin:"http://localhost:5173",
-    credentials:true
+    origin: ["http://localhost:5173", "https://prepwise-ai.vercel.app"],
+    credentials: true
 }))
 
 const limiter = rateLimit({
