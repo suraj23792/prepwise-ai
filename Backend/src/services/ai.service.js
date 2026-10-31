@@ -2,8 +2,47 @@ const { GoogleGenAI } = require("@google/genai");
 const puppeteer = require("puppeteer");
 
 const ai = new GoogleGenAI({
-    apiKey: process.env.GOOGLE_GENAI_API_KEY
+    apiKey: process.env.GEMINI_API_KEY || process.env.GOOGLE_GENAI_API_KEY
 });
+
+const PRIMARY_MODEL = "gemini-flash-latest";
+const FALLBACK_MODELS = ["gemini-flash-lite-latest", "gemini-3-flash-preview"];
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+// Gemini 503/429 aaye to retry karta hai, phir dusre model par jata hai
+async function generateWithRetry(params) {
+    const models = [PRIMARY_MODEL, ...FALLBACK_MODELS];
+    let lastError;
+
+    for (const model of models) {
+        for (let attempt = 1; attempt <= 2; attempt++) {
+            try {
+                return await ai.models.generateContent({ ...params, model });
+            } catch (error) {
+                lastError = error;
+                const status = error.status;
+                console.error(`Gemini call failed (model: ${model}, attempt: ${attempt}, status: ${status})`);
+
+                if (status === 404) break; // model available nahi -> agla model
+                if (status !== 503 && status !== 429 && status !== 500) throw error;
+                await sleep(1500 * attempt);
+            }
+        }
+    }
+    throw lastError;
+}
+
+// Gemini response se JSON nikalta hai
+function extractJson(response) {
+    const text =
+        response.candidates?.[0]?.content?.parts?.[0]?.text || response.text;
+
+    if (!text) throw new Error("Empty response from Gemini");
+
+    const cleaned = text.replace(/```json|```/g, "").trim();
+    return JSON.parse(cleaned);
+}
 
 async function generateInterviewReport({
     resume,
@@ -75,42 +114,27 @@ ${selfDescription}
 Job Description:
 ${jobDescription}
 `
-   try{
-    const response = await ai.models.generateContent({
-       model: "gemini-flash-latest",
-        contents: prompt,
 
-        config: {
-            responseMimeType: "application/json"
-        }
-    });
-    return response;
+    try {
+        const response = await generateWithRetry({
+            contents: prompt,
+            config: {
+                responseMimeType: "application/json"
+            }
+        });
 
-
-
-
-
-
-} catch (error){console.error("gemini api request faild:",error);
-    throw new Error("failed to generate interview report");
-}
-
-
-
-    const text =
-        response.candidates?.[0]?.content?.parts?.[0]?.text;
-
-    console.log("RAW GEMINI RESPONSE:");
-    console.log(text);
-
-    const parsedData = JSON.parse(text);
-
-    return parsedData;
+        return extractJson(response);
+    } catch (error) {
+        console.error("gemini api request failed:", error);
+        throw new Error("failed to generate interview report");
+    }
 }
 
 async function generatePdfFromHtml(htmlContent) {
 
-    const browser = await puppeteer.launch();
+    const browser = await puppeteer.launch({
+        args: ["--no-sandbox", "--disable-setuid-sandbox"]
+    });
 
     const page = await browser.newPage();
 
@@ -168,27 +192,16 @@ Requirements:
 - No explanation text
 `;
 
-    const response = await ai.models.generateContent({
-        model: "gemini-2.5-flash",
-
+    const response = await generateWithRetry({
         contents: prompt,
-
         config: {
             responseMimeType: "application/json"
         }
     });
 
-    const text =
-        response.candidates?.[0]?.content?.parts?.[0]?.text;
+    const jsonContent = extractJson(response);
 
-    console.log("RESUME RESPONSE:");
-    console.log(text);
-
-    const jsonContent = JSON.parse(text);
-
-    const pdfBuffer = await generatePdfFromHtml(
-        jsonContent.html
-    );
+    const pdfBuffer = await generatePdfFromHtml(jsonContent.html);
 
     return pdfBuffer;
 }
