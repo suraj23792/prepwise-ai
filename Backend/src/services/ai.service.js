@@ -74,8 +74,8 @@ ${selfDescription}
 
 Job Description:
 ${jobDescription}
-`;
-
+`
+   try{
     const response = await ai.models.generateContent({
        model: "gemini-flash-latest",
         contents: prompt,
@@ -84,6 +84,18 @@ ${jobDescription}
             responseMimeType: "application/json"
         }
     });
+    return response;
+
+
+
+
+
+
+} catch (error){console.error("gemini api request faild:",error);
+    throw new Error("failed to generate interview report");
+}
+
+
 
     const text =
         response.candidates?.[0]?.content?.parts?.[0]?.text;
